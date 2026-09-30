@@ -4,6 +4,7 @@ import sys
 import traceback
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
+from aiogram.types import BufferedInputFile
 from aiogram.filters import Command
 from dotenv import load_dotenv
 
@@ -35,12 +36,16 @@ print("✅ Шаг 5: Dispatcher создан", flush=True)
 
 from database import Database
 from llm import OllamaLLM
+from charts import ChartGenerator
 
 db = Database()
 print("✅ Шаг 6: Database инициализирована", flush=True)
 
 llm = OllamaLLM()
 print("✅ Шаг 7: LLM инициализирован", flush=True)
+
+charts = ChartGenerator()
+print("✅ Шаг 8: ChartGenerator инициализирован", flush=True)
 
 user_cache = {}
 
@@ -66,14 +71,16 @@ async def cmd_start(message: types.Message):
 • "такси до работы 500"
 • "продукты 2500"
 
-🎯 Новые возможности:
+🎯 Возможности:
 • /goal 1000000 2026-12-31 — установить цель
-• /patterns — анализ твоих трат по дням недели
-• /whatif кофе 0 — симулятор "что если я откажусь от кофе"
+• /patterns — анализ трат по дням недели
+• /whatif кофе — симулятор экономии
 • /stats — статистика за неделю
+• /chart — графики трат 📊
+• /chart month — графики за месяц
 • /limit 2000 — дневной лимит
 
-🔔 Каждое утро в 9:00 я буду присылать тебе персональный инсайт!
+🔔 Каждое утро в 9:00 я присылаю персональный инсайт!
 """
     await message.answer(text)
 
@@ -93,8 +100,10 @@ async def cmd_help(message: types.Message):
 
 📊 Аналитика:
 • /stats — статистика за неделю
+• /chart — графики трат (круговая + по дням + сравнение недель)
+• /chart month — графики за месяц
 • /patterns — в какие дни ты тратишь больше
-• /whatif кофе 0 — сколько сэкономишь, если отказаться
+• /whatif кофе — сколько сэкономишь, если отказаться
 
 💰 Лимиты:
 • /limit 2000 — дневной лимит трат
@@ -405,6 +414,70 @@ async def cmd_whatif(message: types.Message):
 # ============================================
 # ОБРАБОТКА ТРАТ
 # ============================================
+@dp.message(Command("chart"))
+async def cmd_chart(message: types.Message):
+    """Генерация графиков"""
+    user_id = get_user_id(message.from_user.id)
+    print(f"✅ /chart от пользователя {message.from_user.id}", flush=True)
+    
+    args = message.text.split()
+    days = 7
+    
+    if len(args) >= 2:
+        try:
+            if args[1].lower() == "month":
+                days = 30
+            elif args[1].isdigit():
+                days = int(args[1])
+                if days < 1 or days > 90:
+                    raise ValueError
+        except:
+            await message.answer(
+                "📊 Использование:\n"
+                "• /chart — за неделю\n"
+                "• /chart month — за месяц\n"
+                "• /chart 14 — за 14 дней"
+            )
+            return
+    
+    await message.answer("🎨 Генерирую графики...")
+    
+    try:
+        # 1. Круговая диаграмма
+        pie_buf = charts.generate_pie_chart(user_id, days)
+        if pie_buf:
+            period_text = "неделю" if days == 7 else f"{days} дней"
+            await message.answer_photo(
+                photo=BufferedInputFile(pie_buf.getvalue(), filename="pie.png"),
+                caption=f"📊 Распределение трат за {period_text}"
+            )
+        else:
+            await message.answer("📊 Нет данных для круговой диаграммы.")
+        
+        # 2. График по дням
+        daily_buf = charts.generate_daily_chart(user_id, days)
+        if daily_buf:
+            period_text = "неделю" if days == 7 else f"{days} дней"
+            await message.answer_photo(
+                photo=BufferedInputFile(daily_buf.getvalue(), filename="daily.png"),
+                caption=f"📅 Траты по дням за {period_text}"
+            )
+        
+        # 3. Сравнение недель (только если запрошена неделя)
+        if days == 7:
+            comparison_buf = charts.generate_comparison_chart(user_id)
+            if comparison_buf:
+                await message.answer_photo(
+                    photo=BufferedInputFile(comparison_buf.getvalue(), filename="comparison.png"),
+                    caption="📊 Сравнение этой и прошлой недели"
+                )
+    
+    except Exception as e:
+        print(f"❌ Ошибка в /chart: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        await message.answer("⚠️ Ошибка при генерации графиков.")
+
 
 @dp.message(F.text)
 async def handle_expense(message: types.Message):
